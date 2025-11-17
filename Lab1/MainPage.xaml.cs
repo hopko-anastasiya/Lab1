@@ -226,9 +226,6 @@ namespace Lab1
                 .Where(c => c.Value is double) // Тільки ті, що вже обчислені як double
                 .ToDictionary(c => c.Name, c => Convert.ToDouble(c.Value));
 
-            // Скидаємо Value, щоб уникнути використання старого значення у випадку помилки
-            object? oldValue = cell.Value;
-            cell.Value = null;
 
             try
             {

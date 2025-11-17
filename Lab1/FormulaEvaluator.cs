@@ -18,6 +18,11 @@ namespace Lab1
             _cellValues = cellValues;
         }
 
+        public override double VisitFormula(FormulaParser.FormulaContext context)
+        {
+            return Visit(context.expr());
+        }
+
         public override double VisitNumberExpr(FormulaParser.NumberExprContext context)
         {
             if (double.TryParse(context.GetText(), out double result))
@@ -30,7 +35,7 @@ namespace Lab1
             string cellName = context.GetText();
             if (_cellValues.TryGetValue(cellName, out double value))
                 return value;
-            return 0;
+            throw new Exception($"Посилання на неіснуючу клітинку");
         }
 
         public override double VisitAddExpr(FormulaParser.AddExprContext context)
@@ -53,7 +58,7 @@ namespace Lab1
             double right = Visit(context.expr(1));
             return left * right;
         }
-
+        
         public override double VisitDivExpr(FormulaParser.DivExprContext context)
         {
             double left = Visit(context.expr(0));
