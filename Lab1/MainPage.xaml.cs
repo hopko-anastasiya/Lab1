@@ -5,6 +5,9 @@ using CommunityToolkit.Maui.Storage;
 using ClosedXML.Excel;
 using System.Numerics;
 using Microsoft.Maui.Controls;
+using Antlr4.Runtime;
+
+using MyCell = Lab1.Data.Cell;
 
 namespace Lab1
 {
@@ -24,29 +27,34 @@ namespace Lab1
 
             table = new Table(10, 10);
 
-
-            ExpressionEntry.TextChanged += (s, e) =>
-            {
-                if (_activeCell != null)
-                {
-                    _activeCell.Expression = ExpressionEntry.Text;
-                }
-            };
-
-            ExpressionEntry.Completed += (s, e) =>
-            {
-                if (_activeCell != null)
-                {
-                    // Примусово обчислюємо та оновлюємо
-                    _activeCell.Expression = ExpressionEntry.Text;
-
-                    // Втрачаємо фокус, щоб спрацювала логіка RecalculateAll
-                    ExpressionEntry.Unfocus();
-                }
-            };
-
             DisplayTable();
 
+            ExpressionEntry.Unfocused += (s, e) =>
+            {
+                // Запуск логіки RecalculateAll тут гарантує, що всі залежні клітинки оновляться після зміни ExpressionEntry
+                if (_activeCell != null && _activeCell.Expression != ExpressionEntry.Text)
+                {
+                    _activeCell.Expression = ExpressionEntry.Text;
+                    RecalculateCell(_activeCell); // Обчислюємо активну клітинку
+                }
+
+                RecalculateAll(); // Переобчислюємо всю таблицю
+
+                // Оновлюємо ExpressionEntry, щоб показати Expression, а не Value, коли вона не активна
+                if (_activeCell != null)
+                {
+                    ExpressionEntry.Text = _activeCell.Expression;
+                }
+
+                if (_activeEntryControl != null)
+                {
+                    _activeEntryControl.Text = _activeCell?.Value?.ToString() ?? _activeCell?.Expression ?? "";
+                    _activeEntryControl.BackgroundColor = Colors.White; // Гарантуємо, що колір повернеться до білого
+                }
+
+                _activeCell = null;
+                _activeEntryControl = null;
+            };
         }
 
         private void DisplayTable()
@@ -70,7 +78,7 @@ namespace Lab1
             {
                 var label = new Label
                 {
-                    Text = ((char)('A' + c)).ToString(),
+                    Text = CellName.GetColumnName(c),
                     FontAttributes = FontAttributes.Bold,
                     HorizontalTextAlignment = Microsoft.Maui.TextAlignment.Center,
                     VerticalTextAlignment = Microsoft.Maui.TextAlignment.Center,
@@ -144,28 +152,176 @@ namespace Lab1
                         _activeCell = cell;
                         _activeEntryControl = entry;
 
+                        // Показуємо Expression у верхньому полі
                         ExpressionEntry.Text = cell.Expression;
+
+                        // Встановлюємо фокус на ExpressionEntry
+                        ExpressionEntry.Focus();
+
                         entry.BackgroundColor = Color.FromArgb("#502A3756");
                     };
 
                     entry.Unfocused += (s, e) =>
                     {
-                        if (_activeEntryControl == entry) 
-                            entry.BackgroundColor = Color.FromArgb("#502A3756"); 
-                        else
-                            entry.BackgroundColor = Colors.White;
+                        // Якщо Unfocus відбувся на клітинці, але вона не була активною для ExpressionEntry
+                        if (_activeCell == cell && _activeCell.Expression != entry.Text)
+                        {
+                            _activeCell.Expression = entry.Text;
+                            RecalculateCell(_activeCell);
+                            RecalculateAll();
+                        }
+
+                        // Оновлюємо відображення Entry після обчислення
+                        entry.Text = cell.Value?.ToString() ?? cell.Expression;
+                        entry.BackgroundColor = Colors.White;
+
+                        // НЕ СКИДАЄМО _activeCell ТУТ, це робить ExpressionEntry.Unfocused
                     };
-                    
-                    entry.TextChanged += (s, e) => { 
-                        if (_activeCell == cell) 
-                            cell.Expression = entry.Text;
+
+                    entry.TextChanged += (s, e) =>
+                    {
+                        // Оновлюємо Expression клітинки. Це відбувається перед Recalculate
+                        cell.Expression = entry.Text;
                     };
+
 
                     TableGrid.Add(border, c + 1, r + 1);
                 }
             }
+
+
+            ExpressionEntry.TextChanged += (s, e) =>
+            {
+                if (_activeCell != null && ExpressionEntry.IsFocused)
+                {
+                    _activeCell.Expression = ExpressionEntry.Text;
+                }
+            };
+
+            ExpressionEntry.Completed += (s, e) =>
+            {
+                // Втрачаємо фокус, що запускає логіку в ExpressionEntry.Unfocused
+                ExpressionEntry.Unfocus();
+            };
         }
 
+
+        private void RecalculateCell(MyCell cell)
+        {
+            if (string.IsNullOrWhiteSpace(cell.Expression))
+            {
+                cell.Value = null;
+                return;
+            }
+
+            // Якщо просто число — не парсимо через ANTLR
+            if (double.TryParse(cell.Expression, out double number))
+            {
+                cell.Value = number;
+                return;
+            }
+
+            var cellValues = table.Rows
+                .SelectMany(r => r.Cells.Values)
+                .Where(c => c.Value is double) // Тільки ті, що вже обчислені як double
+                .ToDictionary(c => c.Name, c => Convert.ToDouble(c.Value));
+
+            // Скидаємо Value, щоб уникнути використання старого значення у випадку помилки
+            object? oldValue = cell.Value;
+            cell.Value = null;
+
+            try
+            {
+                var inputStream = new AntlrInputStream(cell.Expression);
+                var lexer = new FormulaLexer(inputStream);
+                var tokens = new CommonTokenStream(lexer);
+                var parser = new FormulaParser(tokens);
+
+                // ВИПРАВЛЕННЯ: Додаємо обробку помилок
+                lexer.RemoveErrorListeners();
+                parser.RemoveErrorListeners();
+
+                var parserErrorListener = new ErrorListener();
+                parser.AddErrorListener(parserErrorListener);
+
+                var tree = parser.formula();
+
+                // Якщо є синтаксичні помилки
+                if (parserErrorListener.Errors.Any() || parser.NumberOfSyntaxErrors > 0 || tree == null)
+                {
+                    cell.Value = "#SYNTAX_ERROR";
+                    return;
+                }
+
+                var evaluator = new FormulaEvaluator(cellValues);
+
+                cell.Value = evaluator.Visit(tree);
+            }
+            catch (Exception ex)
+            {
+                // Обробка помилок обчислення (наприклад, ділення на нуль, неіснуюча клітинка)
+                // Можемо залишити Value як текст помилки
+                cell.Value = "#CALC_ERROR";
+            }
+        }
+
+        private void RecalculateAll()
+        {
+            bool changed;
+            const int maxIterations = 50; // Обмеження для запобігання нескінченному циклу (може вказувати на циклічну залежність)
+            int iterations = 0;
+
+            do
+            {
+                changed = false;
+                iterations++;
+
+                // Створюємо список усіх клітинок для ітерації
+                var allCells = table.Rows.SelectMany(r => r.Cells.Values).ToList();
+
+                foreach (var cell in allCells)
+                {
+                    var oldValue = cell.Value;
+
+                    RecalculateCell(cell);
+
+                    // Перевіряємо, чи змінилося значення
+                    if (oldValue == null && cell.Value != null ||
+                        oldValue != null && cell.Value == null ||
+                        (oldValue != null && cell.Value != null &&
+                            // Порівняння значень, враховуючи, що Value може бути рядком помилки або числом
+                            (oldValue.ToString() != cell.Value.ToString() ||
+                            (oldValue is double && cell.Value is double && Math.Abs((double)oldValue - (double)cell.Value) > 1e-9))))
+                    {
+                        changed = true;
+                    }
+                }
+
+            } while (changed && iterations < maxIterations); // Повторюємо, доки є зміни або не досягнено ліміту ітерацій
+
+            // Оновлюємо відображення в Entry (цей цикл залишається без змін)
+            // ... (ваш існуючий код оновлення відображення)
+            foreach (var kvp in _cellEntryControls)
+            {
+                var cellName = kvp.Key;
+                var entry = kvp.Value;
+
+                var cell = table.Rows
+                    .SelectMany(r => r.Cells.Values)
+                    .FirstOrDefault(c => c.Name == cellName);
+
+                // ВИПРАВЛЕННЯ: Якщо клітинка активна, не змінюємо її текст, щоб не переривати введення
+                if (cell != null && cell != _activeCell)
+                    entry.Text = cell.Value?.ToString() ?? cell.Expression;
+                else if (cell != null && cell == _activeCell && !ExpressionEntry.IsFocused)
+                {
+                    // Оновлюємо активну клітинку, якщо ExpressionEntry не сфокусована
+                    entry.Text = cell.Value?.ToString() ?? cell.Expression;
+                }
+            }
+
+
+        }
 
         private async Task SaveFile()
         {
