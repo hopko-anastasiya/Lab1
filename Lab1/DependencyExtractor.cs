@@ -12,13 +12,10 @@ namespace Lab1
 
         public override object VisitCellExpr(FormulaParser.CellExprContext context)
         {
-            // Збираємо ім'я клітинки
             ReferencedCells.Add(context.GetText());
             return base.VisitCellExpr(context);
         }
 
-        // Перевизначаємо інші методи Visit, щоб продовжити обхід дерева,
-        // але повертаємо null або object, оскільки нас не цікавить обчислення.
         public override object VisitFormula(FormulaParser.FormulaContext context) => Visit(context.expr());
         public override object VisitNumberExpr(FormulaParser.NumberExprContext context) => null;
         public override object VisitAddExpr(FormulaParser.AddExprContext context) => base.VisitAddExpr(context);

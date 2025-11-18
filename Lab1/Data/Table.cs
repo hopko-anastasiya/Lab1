@@ -100,11 +100,8 @@ namespace Lab1.Data
                 {
                     throw new IndexOutOfRangeException($"Клітинка '{name}' знаходиться за межами таблиці.");
                 }
-
-                // Рядок має індекс 0-based
                 if (!Rows[row].Cells.TryGetValue(col, out var cell))
                 {
-                    // Це повинно статися лише, якщо таблиця була створена некоректно
                     throw new Exception($"Не вдалося знайти клітинку '{name}' за координатами.");
                 }
 
@@ -120,7 +117,6 @@ namespace Lab1.Data
             }
             catch (Exception ex)
             {
-                // Обробляємо інші потенційні помилки, пов'язані з доступом до списку/словника
                 throw new InvalidOperationException($"Помилка при отриманні клітинки '{name}'.", ex);
             }
         }

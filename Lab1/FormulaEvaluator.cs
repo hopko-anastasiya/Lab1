@@ -11,7 +11,6 @@ namespace Lab1
 {
     public class FormulaEvaluator : FormulaBaseVisitor<double>
     {
-        // Словник для значень клітинок
         private readonly Dictionary<string, double> _cellValues;
         private readonly Table _table;
 
@@ -42,26 +41,19 @@ namespace Lab1
             try
             {
                 targetCell = _table.GetCellByName(cellName);
-                // Це викличе логіку парсингу імені та перевірки IndexOutOfRangeException
-                // Якщо клітинка існує, але порожня, ми просто повертаємо 0.
                 if (targetCell.Value?.ToString().StartsWith("#") == true)
                 {
-                    // Якщо клітинка, на яку посилаються, є помилкою (наприклад, #CYCLE!, #REF!),
-                    // кидаємо виняток, щоб викликати #CALC_ERROR в поточній клітинці.
                     throw new InvalidOperationException($"Reference to error cell: {cellName}");
                 }
 
-                // Якщо GetCellByName не кинув виняток (клітинка існує, але порожня/не число)
                 return 0;
             }
-            catch (ArgumentException) // Ловить IndexOutOfRangeException, FormatException з GetCellByName
+            catch (ArgumentException)
             {
-                // Клітинка не існує (наприклад, ZZ100), кидаємо виняток для #REF!
                 throw new InvalidOperationException($"Reference error: {cellName} does not exist.");
             }
             catch (InvalidOperationException)
             {
-                // Прокидаємо виняток для обробки в RecalculateCell як #CALC_ERROR
                 throw;
             }
         }
@@ -122,7 +114,6 @@ namespace Lab1
             return Visit(context.expr());
         }
 
-        // Для порівнянь можна додати методи, які повертають 1.0 для true, 0.0 для false
         public override double VisitEqualExpr(FormulaParser.EqualExprContext context)
         {
             return Visit(context.expr(0)) == Visit(context.expr(1)) ? 1.0 : 0.0;

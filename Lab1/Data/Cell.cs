@@ -33,7 +33,7 @@ namespace Lab1.Data
 
         public void SetError(string errorMessage)
         {
-            this.Value = null; // Помилка обчислення скидає значення
+            this.Value = null;
             this.Error = errorMessage;
         }
         public string DisplayText
