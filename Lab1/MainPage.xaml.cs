@@ -14,6 +14,7 @@ namespace Lab1
     public partial class MainPage : ContentPage
     {
         private Table table;
+        private bool _showExpressions = false;
 
         private Lab1.Data.Cell? _activeCell;
         private Entry? _activeEntryControl;
@@ -31,6 +32,7 @@ namespace Lab1
 
             ExpressionEntry.Unfocused += (s, e) =>
             {
+                RecalculateAll();
                 // Запуск логіки RecalculateAll тут гарантує, що всі залежні клітинки оновляться після зміни ExpressionEntry
                 if (_activeCell != null && _activeCell.Expression != ExpressionEntry.Text)
                 {
@@ -38,7 +40,7 @@ namespace Lab1
                     RecalculateCell(_activeCell); // Обчислюємо активну клітинку
                 }
 
-                RecalculateAll(); // Переобчислюємо всю таблицю
+                 // Переобчислюємо всю таблицю
 
                 // Оновлюємо ExpressionEntry, щоб показати Expression, а не Value, коли вона не активна
                 if (_activeCell != null)
@@ -46,14 +48,12 @@ namespace Lab1
                     ExpressionEntry.Text = _activeCell.Expression;
                 }
 
+                _activeCell = null;
                 if (_activeEntryControl != null)
                 {
-                    _activeEntryControl.Text = _activeCell?.Value?.ToString() ?? _activeCell?.Expression ?? "";
-                    _activeEntryControl.BackgroundColor = Colors.White; // Гарантуємо, що колір повернеться до білого
+                    _activeEntryControl.BackgroundColor = Colors.White;
+                    _activeEntryControl = null;
                 }
-
-                _activeCell = null;
-                _activeEntryControl = null;
             };
         }
 
@@ -62,6 +62,7 @@ namespace Lab1
             TableGrid.RowDefinitions.Clear();
             TableGrid.ColumnDefinitions.Clear();
             TableGrid.Children.Clear();
+            _cellEntryControls.Clear();
 
             int rows = table.RowCount;
             int cols = table.ColCount;
@@ -128,12 +129,13 @@ namespace Lab1
 
                     var entry = new Entry
                     {
-                        Text = displayValue,
+                        Text = _showExpressions ? cell.Expression : (cell.Value?.ToString() ?? cell.Expression),
                         BackgroundColor = Colors.White,
                         HorizontalTextAlignment = Microsoft.Maui.TextAlignment.Center,
                         WidthRequest = 70,
                         TextColor = Color.FromArgb("#2A3756")
                     };
+
 
                     var border = new Border
                     {
@@ -163,7 +165,6 @@ namespace Lab1
 
                     entry.Unfocused += (s, e) =>
                     {
-                        // Якщо Unfocus відбувся на клітинці, але вона не була активною для ExpressionEntry
                         if (_activeCell == cell && _activeCell.Expression != entry.Text)
                         {
                             _activeCell.Expression = entry.Text;
@@ -171,17 +172,16 @@ namespace Lab1
                             RecalculateAll();
                         }
 
-                        // Оновлюємо відображення Entry після обчислення
-                        entry.Text = cell.Value?.ToString() ?? cell.Expression;
+                        UpdateCellDisplay();
                         entry.BackgroundColor = Colors.White;
-
-                        // НЕ СКИДАЄМО _activeCell ТУТ, це робить ExpressionEntry.Unfocused
                     };
 
                     entry.TextChanged += (s, e) =>
                     {
-                        // Оновлюємо Expression клітинки. Це відбувається перед Recalculate
-                        cell.Expression = entry.Text;
+                        if (entry.IsFocused)
+                        {
+                            cell.Expression = entry.Text;
+                        }
                     };
 
 
@@ -203,6 +203,8 @@ namespace Lab1
                 // Втрачаємо фокус, що запускає логіку в ExpressionEntry.Unfocused
                 ExpressionEntry.Unfocus();
             };
+
+            UpdateCellDisplay();
         }
 
 
@@ -210,74 +212,100 @@ namespace Lab1
         {
             if (string.IsNullOrWhiteSpace(cell.Expression))
             {
-                cell.Value = null;
+                // Очищаємо залежності, якщо вираз порожній
+                UpdateDependencies(cell, null);
+                cell.SetValue(null); // використовуємо SetValue
                 return;
             }
 
             // Якщо просто число — не парсимо через ANTLR
             if (double.TryParse(cell.Expression, out double number))
             {
-                cell.Value = number;
+                UpdateDependencies(cell, null);
+                cell.SetValue(number); // використовуємо SetValue
                 return;
             }
 
+            // 1. АНАЛІЗ ВИРАЗУ
+            var inputStream = new AntlrInputStream(cell.Expression);
+            var lexer = new FormulaLexer(inputStream);
+            var tokens = new CommonTokenStream(lexer);
+            var parser = new FormulaParser(tokens);
+
+            lexer.RemoveErrorListeners();
+            parser.RemoveErrorListeners();
+
+            var parserErrorListener = new ErrorListener();
+            parser.AddErrorListener(parserErrorListener);
+
+            var tree = parser.formula();
+
+            // 2. ОБРОБКА СИНТАКСИЧНИХ ПОМИЛОК
+            if (parserErrorListener.Errors.Any() || parser.NumberOfSyntaxErrors > 0 || tree == null)
+            {
+                UpdateDependencies(cell, null);
+                cell.SetError("#SYNTAX_ERROR"); // використовуємо SetError
+                return;
+            }
+
+            // 3. ОНОВЛЕННЯ ГРАФА
+            // Тут ми оновлюємо Dependencies та Dependents.
+            UpdateDependencies(cell, tree);
+
+
+            // 4. ПЕРЕВІРКА НА ЦИКЛ
+            if (CheckForCycle(cell.Name))
+            {
+                cell.SetError("#CYCLE!"); // використовуємо SetError
+                return;
+            }
+
+            // 5. ОБЧИСЛЕННЯ ЗНАЧЕННЯ
             var cellValues = table.Rows
                 .SelectMany(r => r.Cells.Values)
                 .Where(c => c.Value is double) // Тільки ті, що вже обчислені як double
                 .ToDictionary(c => c.Name, c => Convert.ToDouble(c.Value));
 
-
             try
             {
-                var inputStream = new AntlrInputStream(cell.Expression);
-                var lexer = new FormulaLexer(inputStream);
-                var tokens = new CommonTokenStream(lexer);
-                var parser = new FormulaParser(tokens);
+                var evaluator = new FormulaEvaluator(cellValues, table);
 
-                // ВИПРАВЛЕННЯ: Додаємо обробку помилок
-                lexer.RemoveErrorListeners();
-                parser.RemoveErrorListeners();
+                double result = evaluator.Visit(tree);
 
-                var parserErrorListener = new ErrorListener();
-                parser.AddErrorListener(parserErrorListener);
-
-                var tree = parser.formula();
-
-                // Якщо є синтаксичні помилки
-                if (parserErrorListener.Errors.Any() || parser.NumberOfSyntaxErrors > 0 || tree == null)
-                {
-                    cell.Value = "#SYNTAX_ERROR";
-                    return;
-                }
-
-                var evaluator = new FormulaEvaluator(cellValues);
-
-                cell.Value = evaluator.Visit(tree);
+                cell.SetValue(result);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.StartsWith("Reference error"))
+            {
+                cell.SetError("#REF!"); // використовуємо SetError
+            }
+            catch (InvalidOperationException ex) when (ex.Message.StartsWith("Reference to error cell"))
+            {
+                cell.SetError("#CALC_ERROR"); // використовуємо SetError
             }
             catch (Exception ex)
             {
-                // Обробка помилок обчислення (наприклад, ділення на нуль, неіснуюча клітинка)
-                // Можемо залишити Value як текст помилки
-                cell.Value = "#CALC_ERROR";
+                cell.SetError("#CALC_ERROR"); // використовуємо SetError
             }
         }
 
         private void RecalculateAll()
         {
             bool changed;
-            const int maxIterations = 50; // Обмеження для запобігання нескінченному циклу (може вказувати на циклічну залежність)
+            const int maxIterations = 3; // Зменшуємо до мінімуму, оскільки цикли виявляються явно
             int iterations = 0;
+
+            var allCells = table.Rows.SelectMany(r => r.Cells.Values).ToList();
 
             do
             {
                 changed = false;
                 iterations++;
 
-                // Створюємо список усіх клітинок для ітерації
-                var allCells = table.Rows.SelectMany(r => r.Cells.Values).ToList();
-
                 foreach (var cell in allCells)
                 {
+                    // Ми більше не пропускаємо #CYCLE! тут, оскільки може знадобитися його переобчислення,
+                    // якщо його вираз був змінений, і CycleCheck() в RecalculateCell це зробить.
+
                     var oldValue = cell.Value;
 
                     RecalculateCell(cell);
@@ -286,7 +314,7 @@ namespace Lab1
                     if (oldValue == null && cell.Value != null ||
                         oldValue != null && cell.Value == null ||
                         (oldValue != null && cell.Value != null &&
-                            // Порівняння значень, враховуючи, що Value може бути рядком помилки або числом
+                            // Порівняння значень
                             (oldValue.ToString() != cell.Value.ToString() ||
                             (oldValue is double && cell.Value is double && Math.Abs((double)oldValue - (double)cell.Value) > 1e-9))))
                     {
@@ -294,10 +322,17 @@ namespace Lab1
                     }
                 }
 
-            } while (changed && iterations < maxIterations); // Повторюємо, доки є зміни або не досягнено ліміту ітерацій
+            } while (changed && iterations < maxIterations);
 
-            // Оновлюємо відображення в Entry (цей цикл залишається без змін)
-            // ... (ваш існуючий код оновлення відображення)
+            // **!!! ВИДАЛЯЄМО ЛОГІКУ ПЕРЕВІРКИ ЦИКЛУ ПІСЛЯ maxIterations !!!**
+            // Вона більше не потрібна, оскільки цикли виявляються одразу в RecalculateCell.
+
+            UpdateCellDisplay();
+
+        }
+
+        private void UpdateCellDisplay()
+        {
             foreach (var kvp in _cellEntryControls)
             {
                 var cellName = kvp.Key;
@@ -307,19 +342,113 @@ namespace Lab1
                     .SelectMany(r => r.Cells.Values)
                     .FirstOrDefault(c => c.Name == cellName);
 
-                // ВИПРАВЛЕННЯ: Якщо клітинка активна, не змінюємо її текст, щоб не переривати введення
-                if (cell != null && cell != _activeCell)
-                    entry.Text = cell.Value?.ToString() ?? cell.Expression;
-                else if (cell != null && cell == _activeCell && !ExpressionEntry.IsFocused)
+                if (cell != null)
                 {
-                    // Оновлюємо активну клітинку, якщо ExpressionEntry не сфокусована
-                    entry.Text = cell.Value?.ToString() ?? cell.Expression;
+                    string newText;
+
+                    if (_showExpressions)
+                    {
+                        // Режим "Вираз": показуємо Expression
+                        newText = cell.Expression;
+                    }
+                    else
+                    {
+                        // Режим "Значення": показуємо Value або Expression, якщо Value відсутнє/помилкове
+                        newText = cell.Error ?? cell.Value?.ToString() ?? cell.Expression;
+                    }
+
+                    // Оновлюємо текст, тільки якщо клітинка не є активною (інакше це перерве введення)
+                    if (cell != _activeCell)
+                    {
+                        entry.Text = newText;
+                    }
+                    else if (cell == _activeCell && !ExpressionEntry.IsFocused)
+                    {
+                        // Оновлюємо активну клітинку, якщо ExpressionEntry не сфокусована
+                        entry.Text = newText;
+                    }
+                }
+            }
+        }
+        private HashSet<string> UpdateDependencies(MyCell cell, Antlr4.Runtime.Tree.IParseTree tree)
+        {
+            // 1. Видаляємо всі попередні залежності поточної клітинки
+            foreach (var dependentCellName in cell.Dependencies)
+            {
+                var dependentCell = table.Rows.SelectMany(r => r.Cells.Values).FirstOrDefault(c => c.Name == dependentCellName);
+                if (dependentCell != null)
+                {
+                    dependentCell.Dependents.Remove(cell.Name);
+                }
+            }
+            cell.Dependencies.Clear();
+
+            // 2. Витягуємо нові залежності
+            var extractor = new DependencyExtractor();
+            if (tree != null)
+            {
+                extractor.Visit(tree);
+            }
+            cell.Dependencies = extractor.ReferencedCells;
+
+            // 3. Оновлюємо список "Dependents" у клітинок-донорів
+            foreach (var dependentCellName in cell.Dependencies)
+            {
+                // Тут ми не перевіряємо, чи існує клітинка, оскільки це відбудеться в RecalculateCell.
+                // Просто оновлюємо граф, якщо клітинка знайдена в таблиці.
+                var dependentCell = table.Rows.SelectMany(r => r.Cells.Values).FirstOrDefault(c => c.Name == dependentCellName);
+                if (dependentCell != null)
+                {
+                    dependentCell.Dependents.Add(cell.Name);
                 }
             }
 
+            return cell.Dependencies;
+        }
+        private bool CheckForCycle(string startCellName)
+        {
+            var allCells = table.Rows.SelectMany(r => r.Cells.Values).ToDictionary(c => c.Name, c => c);
 
+            // Відвідувані клітинки (для відстеження шляху та уникнення нескінченного циклу)
+            var visited = new HashSet<string>();
+            // Клітинки на поточному рекурсивному шляху (для виявлення циклу)
+            var recursionStack = new HashSet<string>();
+
+            return DFS(startCellName, allCells, visited, recursionStack);
         }
 
+        private bool DFS(string cellName, Dictionary<string, MyCell> allCells, HashSet<string> visited, HashSet<string> recursionStack)
+        {
+            if (!allCells.TryGetValue(cellName, out var cell))
+            {
+                // Якщо клітинка не існує, це не цикл (буде #REF!), але зупиняємо пошук
+                return false;
+            }
+
+            if (recursionStack.Contains(cellName))
+            {
+                return true; // ЗНАЙДЕНО ЦИКЛ!
+            }
+
+            if (visited.Contains(cellName))
+            {
+                return false; // Клітинка вже відвідана і не є частиною циклу
+            }
+
+            visited.Add(cellName);
+            recursionStack.Add(cellName);
+
+            foreach (var dependencyName in cell.Dependencies)
+            {
+                if (DFS(dependencyName, allCells, visited, recursionStack))
+                {
+                    return true;
+                }
+            }
+
+            recursionStack.Remove(cellName);
+            return false;
+        }
         private async Task SaveFile()
         {
             try
@@ -454,7 +583,20 @@ namespace Lab1
             DisplayTable();
         }
 
-        
+        private void ToggleModeButton_Clicked(object sender, EventArgs e)
+        {
+            // 1. Інвертуємо прапорець
+            _showExpressions = !_showExpressions;
+
+            // 2. Оновлюємо текст кнопки для зворотного зв'язку
+            if (sender is Button button)
+            {
+                button.Text = _showExpressions ? "Показати Значення" : "Показати Вирази";
+            }
+
+            // 3. Оновлюємо відображення всієї таблиці
+            UpdateCellDisplay();
+        }
 
         private void AddRowButton_Clicked(object sender, EventArgs e)
         {
@@ -463,6 +605,12 @@ namespace Lab1
         }
         private void DeleteRowButton_Clicked(object sender, EventArgs e)
         {
+            if (table.RowCount == 1)
+            {
+                _ = DisplayAlert("Помилка", "В таблиці має бути принаймні один рядок.", "OK");
+                return;
+            }
+
             table.DeleteRow();
             DisplayTable();
         }
@@ -473,6 +621,13 @@ namespace Lab1
         }
         private void DeleteColumnButton_Clicked(object sender, EventArgs e)
         {
+            // Prevent deleting when table is already 1x1: show informative alert
+            if ( table.ColCount == 1)
+            {
+                _ = DisplayAlert("Помилка", "В таблиці має бути принаймні один стовпчик.", "OK");
+                return;
+            }
+
             table.DeleteColumn();
             DisplayTable();
         }

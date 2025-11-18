@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Antlr4.Runtime;
 using Antlr4.Runtime.Misc;
+using Lab1.Data;
 
 namespace Lab1
 {
@@ -12,10 +13,12 @@ namespace Lab1
     {
         // Словник для значень клітинок
         private readonly Dictionary<string, double> _cellValues;
+        private readonly Table _table;
 
-        public FormulaEvaluator(Dictionary<string, double> cellValues)
+        public FormulaEvaluator(Dictionary<string, double> cellValues, Table table)
         {
             _cellValues = cellValues;
+            _table = table;
         }
 
         public override double VisitFormula(FormulaParser.FormulaContext context)
@@ -35,7 +38,32 @@ namespace Lab1
             string cellName = context.GetText();
             if (_cellValues.TryGetValue(cellName, out double value))
                 return value;
-            throw new Exception($"Посилання на неіснуючу клітинку");
+            Lab1.Data.Cell targetCell;
+            try
+            {
+                targetCell = _table.GetCellByName(cellName);
+                // Це викличе логіку парсингу імені та перевірки IndexOutOfRangeException
+                // Якщо клітинка існує, але порожня, ми просто повертаємо 0.
+                if (targetCell.Value?.ToString().StartsWith("#") == true)
+                {
+                    // Якщо клітинка, на яку посилаються, є помилкою (наприклад, #CYCLE!, #REF!),
+                    // кидаємо виняток, щоб викликати #CALC_ERROR в поточній клітинці.
+                    throw new InvalidOperationException($"Reference to error cell: {cellName}");
+                }
+
+                // Якщо GetCellByName не кинув виняток (клітинка існує, але порожня/не число)
+                return 0;
+            }
+            catch (ArgumentException) // Ловить IndexOutOfRangeException, FormatException з GetCellByName
+            {
+                // Клітинка не існує (наприклад, ZZ100), кидаємо виняток для #REF!
+                throw new InvalidOperationException($"Reference error: {cellName} does not exist.");
+            }
+            catch (InvalidOperationException)
+            {
+                // Прокидаємо виняток для обробки в RecalculateCell як #CALC_ERROR
+                throw;
+            }
         }
 
         public override double VisitAddExpr(FormulaParser.AddExprContext context)
@@ -70,6 +98,12 @@ namespace Lab1
         {
             double left = Visit(context.expr(0));
             double right = Visit(context.expr(1));
+
+            if (left == 0.0 && right == 0.0)
+            {
+                return double.NaN;
+            }
+
             return Math.Pow(left, right);
         }
 

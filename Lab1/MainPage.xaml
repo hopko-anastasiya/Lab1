@@ -13,7 +13,7 @@
                         <Button Text="Додати стовпець" Clicked="AddColumnButton_Clicked"/>
                         <Button Text="Видалити рядок" Clicked="DeleteRowButton_Clicked"/>
                         <Button Text="Видалити стовпець" Clicked="DeleteColumnButton_Clicked"/>
-                        <Button Text="Показати формули"/>
+                        <Button Text="Показати вирази" Clicked="ToggleModeButton_Clicked"/>
                     </VerticalStackLayout>
 
                     <BoxView HeightRequest="1" BackgroundColor="white"/>
