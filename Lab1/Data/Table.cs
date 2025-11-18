@@ -44,6 +44,7 @@ namespace Lab1.Data
                 Rows.RemoveAt(RowCount - 1);
                 RowCount--;
             }
+            
         }
 
         public void AddColumn()

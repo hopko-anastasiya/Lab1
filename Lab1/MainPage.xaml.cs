@@ -254,9 +254,18 @@ namespace Lab1
 
 
             // 4. ПЕРЕВІРКА НА ЦИКЛ
-            if (CheckForCycle(cell.Name))
+            var allCells = table.Rows.SelectMany(r => r.Cells.Values).ToDictionary(c => c.Name, c => c);
+            var visited = new HashSet<string>();
+            var recursionStack = new HashSet<string>();
+            var cycleCells = new List<string>();
+
+            if (DFS(cell.Name, allCells, visited, recursionStack, cycleCells))
             {
-                cell.SetError("#CYCLE!"); // використовуємо SetError
+                foreach (var name in cycleCells.Distinct())
+                {
+                    var c = table.GetCellByName(name);
+                    c.SetError("#CYCLE!");
+                }
                 return;
             }
 
@@ -405,19 +414,8 @@ namespace Lab1
 
             return cell.Dependencies;
         }
-        private bool CheckForCycle(string startCellName)
-        {
-            var allCells = table.Rows.SelectMany(r => r.Cells.Values).ToDictionary(c => c.Name, c => c);
 
-            // Відвідувані клітинки (для відстеження шляху та уникнення нескінченного циклу)
-            var visited = new HashSet<string>();
-            // Клітинки на поточному рекурсивному шляху (для виявлення циклу)
-            var recursionStack = new HashSet<string>();
-
-            return DFS(startCellName, allCells, visited, recursionStack);
-        }
-
-        private bool DFS(string cellName, Dictionary<string, MyCell> allCells, HashSet<string> visited, HashSet<string> recursionStack)
+        private bool DFS(string cellName, Dictionary<string, MyCell> allCells, HashSet<string> visited, HashSet<string> recursionStack, List<string> cycleCells)
         {
             if (!allCells.TryGetValue(cellName, out var cell))
             {
@@ -427,7 +425,8 @@ namespace Lab1
 
             if (recursionStack.Contains(cellName))
             {
-                return true; // ЗНАЙДЕНО ЦИКЛ!
+                cycleCells.AddRange(recursionStack);
+                return true;
             }
 
             if (visited.Contains(cellName))
@@ -440,8 +439,9 @@ namespace Lab1
 
             foreach (var dependencyName in cell.Dependencies)
             {
-                if (DFS(dependencyName, allCells, visited, recursionStack))
+                if (DFS(dependencyName, allCells, visited, recursionStack, cycleCells))
                 {
+                    recursionStack.Remove(cellName);
                     return true;
                 }
             }
@@ -491,6 +491,13 @@ namespace Lab1
         }
         private async Task OpenFile()
         {
+            bool saveNeeded = await DisplayAlert("Відкривання нової таблиці", "Відкрити таблицю? Незбережені дані будуть втрачені.\n\nЗберегти поточну таблицю?", "Так, зберегти", "Ні, не зберігати");
+
+            if (saveNeeded)
+            {
+                await SaveFile();
+            }
+
             try
             {
                 var customFileType = new FilePickerFileType(new Dictionary<DevicePlatform, IEnumerable<string>>
@@ -591,7 +598,7 @@ namespace Lab1
             // 2. Оновлюємо текст кнопки для зворотного зв'язку
             if (sender is Button button)
             {
-                button.Text = _showExpressions ? "Показати Значення" : "Показати Вирази";
+                button.Text = _showExpressions ? "Показати значення" : "Показати вирази";
             }
 
             // 3. Оновлюємо відображення всієї таблиці
@@ -613,6 +620,7 @@ namespace Lab1
 
             table.DeleteRow();
             DisplayTable();
+            RecalculateAll();
         }
         private void AddColumnButton_Clicked(object sender, EventArgs e)
         {
@@ -630,10 +638,10 @@ namespace Lab1
 
             table.DeleteColumn();
             DisplayTable();
+            RecalculateAll();
         }
         private async void SaveButton_Clicked(object sender, EventArgs e)
         {
-            // Просто викликаємо асинхронну логіку
             await SaveFile();
         }
         private async void OpenButton_Clicked(object sender, EventArgs e)
@@ -652,6 +660,13 @@ namespace Lab1
         }
         private async void ExitButton_Clicked(object sender, EventArgs e)
         {
+            bool saveNeeded = await DisplayAlert("Вихід", "Ви зби раєтесь вийти. Незбережені дані будуть втрачені.\n\nЗберегти поточну таблицю?", "Так, зберегти", "Ні, не зберігати");
+
+            if (saveNeeded)
+            {
+                await SaveFile();
+            }
+
             bool answer = await DisplayAlert("Підтвердження", "Ви дійсно бажаєте вийти?", "Так", "Ні");
             if (answer)
             {
